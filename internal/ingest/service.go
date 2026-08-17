@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -22,7 +23,7 @@ type Service struct {
 	cache *stats.Cache
 	rdb   *redis.Client
 	log   *slog.Logger
-	wg    sync.WaitGroup
+	wg    sync.WaitGroup // Track background jobs for graceful shutdown
 }
 
 // New builds a Service.
@@ -35,15 +36,9 @@ func (s *Service) Stats(accountID string) stats.AccountStats {
 	return s.cache.Get(accountID)
 }
 
-inserted, err := s.store.InsertEvent(ctx, rec)
-	if err != nil {
-		return err
-	}
-	if !inserted {
-		s.log.Info("duplicate delivery ignored", "event_id", evt.EventID)
-		return nil
-	}
-
+// Ingest stores a delivery and kicks off processing. Processing runs
+// asynchronously so the provider gets a fast acknowledgement.
+func (s *Service) Ingest(ctx context.Context, evt Event) error {
 	payload, err := json.Marshal(evt)
 	if err != nil {
 		return err
@@ -59,9 +54,17 @@ inserted, err := s.store.InsertEvent(ctx, rec)
 		OccurredAt:   evt.OccurredAt,
 		Payload:      payload,
 	}
-	if err := s.store.InsertEvent(ctx, rec); err != nil {
+
+	// Rely on Postgres unique constraint for idempotency
+	inserted, err := s.store.InsertEvent(ctx, rec)
+	if err != nil {
 		return err
 	}
+	if !inserted {
+		s.log.Info("duplicate delivery ignored", "event_id", evt.EventID)
+		return nil
+	}
+
 	if err := s.store.UpsertCall(ctx, rec); err != nil {
 		return err
 	}
@@ -72,21 +75,26 @@ inserted, err := s.store.InsertEvent(ctx, rec)
 
 	// Recordings are slow to fetch, so that part does not block the provider.
 	if rec.RecordingURL != "" {
-		s.wg.Add(1) // <-- Track the new background job
-		bgCtx := context.Background()
+		s.wg.Add(1) // Track the new background job
+		bgCtx := context.Background() // Detach from HTTP context
 		go func() {
-			defer s.wg.Done() // <-- Mark it done when finished
+			defer s.wg.Done() // Mark it done when finished
 			if err := s.processRecording(bgCtx, rec); err != nil {
 				s.log.Error("failed to process recording", "call_id", rec.CallID, "error", err)
 			}
 		}()
 	}
-	return nil
 
+	return nil
+}
+
+// processRecording downloads and transcodes the call recording, then marks
+// the call as done.
 func (s *Service) processRecording(ctx context.Context, rec store.Event) error {
 	time.Sleep(recordingWork)
 	return s.store.MarkRecordingProcessed(ctx, rec.CallID)
 }
+
 // Wait blocks until all background processing goroutines have finished.
 func (s *Service) Wait() {
 	s.wg.Wait()
