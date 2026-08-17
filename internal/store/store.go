@@ -1,4 +1,3 @@
-// Package store persists webhook events, calls, and per-account aggregates.
 package store
 
 import (
@@ -72,18 +71,13 @@ func (s *Store) EventExists(ctx context.Context, eventID string) (bool, error) {
 	return true, nil
 }
 
-// InsertEvent stores the raw delivery, ignoring duplicate event_ids gracefully.
-func (s *Store) InsertEvent(ctx context.Context, e Event) (bool, error) {
-	tag, err := s.pool.Exec(ctx,
+// InsertEvent stores the raw delivery.
+func (s *Store) InsertEvent(ctx context.Context, e Event) error {
+	_, err := s.pool.Exec(ctx,
 		`INSERT INTO events (event_id, call_id, account_id, payload)
-		 VALUES ($1, $2, $3, $4)
-		 ON CONFLICT (event_id) DO NOTHING`,
+		 VALUES ($1, $2, $3, $4)`,
 		e.EventID, e.CallID, e.AccountID, e.Payload)
-	if err != nil {
-		return false, err
-	}
-	// If RowsAffected is 0, the event already existed!
-	return tag.RowsAffected() > 0, nil
+	return err
 }
 
 // UpsertCall creates or refreshes the call record for this event.
@@ -92,10 +86,10 @@ func (s *Store) UpsertCall(ctx context.Context, e Event) error {
 		`INSERT INTO calls (call_id, account_id, status, duration_sec, recording_url, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, now())
 		 ON CONFLICT (call_id) DO UPDATE SET
-		     status        = EXCLUDED.status,
-		     duration_sec  = EXCLUDED.duration_sec,
-		     recording_url = EXCLUDED.recording_url,
-		     updated_at    = now()`,
+			 status        = EXCLUDED.status,
+			 duration_sec  = EXCLUDED.duration_sec,
+			 recording_url = EXCLUDED.recording_url,
+			 updated_at    = now()`,
 		e.CallID, e.AccountID, e.Status, e.DurationSec, e.RecordingURL)
 	return err
 }
@@ -114,8 +108,8 @@ func (s *Store) IncrementAccountStats(ctx context.Context, accountID string, dur
 		`INSERT INTO account_stats (account_id, call_count, total_duration_sec)
 		 VALUES ($1, 1, $2)
 		 ON CONFLICT (account_id) DO UPDATE SET
-		     call_count         = account_stats.call_count + 1,
-		     total_duration_sec = account_stats.total_duration_sec + EXCLUDED.total_duration_sec`,
+			 call_count         = account_stats.call_count + 1,
+			 total_duration_sec = account_stats.total_duration_sec + EXCLUDED.total_duration_sec`,
 		accountID, durationSec)
 	return err
 }

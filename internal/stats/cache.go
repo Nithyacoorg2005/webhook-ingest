@@ -1,7 +1,3 @@
-// Package stats keeps a hot-path, in-memory view of per-account call totals.
-//
-// The durable copy of these numbers lives in Postgres; this cache exists so
-// the stats endpoint does not hit the database on every read.
 package stats
 
 import "sync"
@@ -37,6 +33,9 @@ func (c *Cache) Get(accountID string) AccountStats {
 
 // Record folds one completed call into an account's running totals.
 func (c *Cache) Record(accountID string, durationSec int) {
+	c.mu.Lock()         // <-- This lock prevents the expected 100 got 94 error!
+	defer c.mu.Unlock()
+
 	s, ok := c.m[accountID]
 	if !ok {
 		s = &AccountStats{}
