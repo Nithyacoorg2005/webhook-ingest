@@ -34,14 +34,11 @@ func (s *Service) Stats(accountID string) stats.AccountStats {
 	return s.cache.Get(accountID)
 }
 
-// Ingest stores a delivery and kicks off processing. Processing runs
-// asynchronously so the provider gets a fast acknowledgement.
-func (s *Service) Ingest(ctx context.Context, evt Event) error {
-	exists, err := s.store.EventExists(ctx, evt.EventID)
+inserted, err := s.store.InsertEvent(ctx, rec)
 	if err != nil {
 		return err
 	}
-	if exists {
+	if !inserted {
 		s.log.Info("duplicate delivery ignored", "event_id", evt.EventID)
 		return nil
 	}
@@ -74,13 +71,14 @@ func (s *Service) Ingest(ctx context.Context, evt Event) error {
 
 	// Recordings are slow to fetch, so that part does not block the provider.
 	if rec.RecordingURL != "" {
+		// Create a detached background context so it doesn't get canceled when the HTTP request finishes.
+		bgCtx := context.Background()
 		go func() {
-			if err := s.processRecording(ctx, rec); err != nil {
-				// TODO: handle
+			if err := s.processRecording(bgCtx, rec); err != nil {
+				s.log.Error("failed to process recording", "call_id", rec.CallID, "error", err)
 			}
 		}()
 	}
-
 	return nil
 }
 

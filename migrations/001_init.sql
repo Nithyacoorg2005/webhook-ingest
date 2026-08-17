@@ -24,3 +24,5 @@ CREATE TABLE IF NOT EXISTS account_stats (
     call_count         BIGINT NOT NULL DEFAULT 0,
     total_duration_sec BIGINT NOT NULL DEFAULT 0
 );
+
+ALTER TABLE events ADD CONSTRAINT events_event_id_key UNIQUE (event_id);
