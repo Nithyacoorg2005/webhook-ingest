@@ -57,7 +57,22 @@ func main() {
 	log.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+	
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("shutdown", "err", err)
+	}
+
+	// Wait for background jobs to finish before exiting
+	done := make(chan struct{})
+	go func() {
+		svc.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Info("background jobs completed cleanly")
+	case <-shutdownCtx.Done():
+		log.Error("timeout waiting for background jobs to finish")
 	}
 }

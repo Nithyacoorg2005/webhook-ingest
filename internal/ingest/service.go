@@ -22,6 +22,7 @@ type Service struct {
 	cache *stats.Cache
 	rdb   *redis.Client
 	log   *slog.Logger
+	wg    sync.WaitGroup
 }
 
 // New builds a Service.
@@ -71,20 +72,22 @@ inserted, err := s.store.InsertEvent(ctx, rec)
 
 	// Recordings are slow to fetch, so that part does not block the provider.
 	if rec.RecordingURL != "" {
-		// Create a detached background context so it doesn't get canceled when the HTTP request finishes.
+		s.wg.Add(1) // <-- Track the new background job
 		bgCtx := context.Background()
 		go func() {
+			defer s.wg.Done() // <-- Mark it done when finished
 			if err := s.processRecording(bgCtx, rec); err != nil {
 				s.log.Error("failed to process recording", "call_id", rec.CallID, "error", err)
 			}
 		}()
 	}
 	return nil
-}
 
-// processRecording downloads and transcodes the call recording, then marks
-// the call as done.
 func (s *Service) processRecording(ctx context.Context, rec store.Event) error {
 	time.Sleep(recordingWork)
 	return s.store.MarkRecordingProcessed(ctx, rec.CallID)
+}
+// Wait blocks until all background processing goroutines have finished.
+func (s *Service) Wait() {
+	s.wg.Wait()
 }
